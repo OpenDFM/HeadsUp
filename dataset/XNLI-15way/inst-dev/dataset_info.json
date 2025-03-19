@@ -1,0 +1,42 @@
+{
+  "builder_name": "csv",
+  "citation": "",
+  "config_name": "default",
+  "dataset_name": "csv",
+  "dataset_size": 15728933,
+  "description": "",
+  "download_checksums": {
+    "~/workspace/modularity/dataset/XNLI-15way/xnli.15way.orig.tsv": {
+      "num_bytes": 15278978,
+      "checksum": null
+    }
+  },
+  "download_size": 15278978,
+  "features": {
+    "input_str": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "target_str": {
+      "dtype": "string",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 31007911,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 15728933,
+      "num_examples": 10000,
+      "dataset_name": "csv"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}
