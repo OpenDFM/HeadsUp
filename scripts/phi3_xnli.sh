@@ -1,6 +1,5 @@
 #!/bin/bash
 
-EMBED_MODEL_PATH="~/PretrainedModels/bge-m3"
 LM_MODEL_PATH="~/PretrainedModels/phi-3.5-mini-instruct"
 TRAIN_DATA_PATH="../dataset/XNLI-15way/xnli.15way.orig.tsv"
 DEV_DATA_PATH="../dataset/XNLI-15way/xnli.15way.orig.tsv"
@@ -9,8 +8,7 @@ NUM_GPUS=1
 source activate modularity
 cd ../
 
-WANDB_MODE=offline python train_weight_tensor_xnli.py \
-    --embed_model_path $EMBED_MODEL_PATH \
+WANDB_MODE=offline python train_mask.py \
     --lm_model_path $LM_MODEL_PATH \
     --train_data_path $TRAIN_DATA_PATH \
     --dev_data_path $DEV_DATA_PATH \
