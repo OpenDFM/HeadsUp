@@ -3,4 +3,4 @@
 
 We provide our rough project files here. When the paper becomes public, we will tidy up the files!
 
-**For reviewers:** Please refer to [rebuttal.pdf](rebuttal_pdf).
+**For reviewers:** Please refer to [rebuttal.pdf](rebuttal.pdf).
