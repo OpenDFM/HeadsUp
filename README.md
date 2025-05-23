@@ -1,6 +1,4 @@
-# AttentionAssemble
-[ICML 2025, under reviewing] Codes for the paper.
+# Heads up! Large Language Models Can Perform Tasks Without Your Instruction via Selective Attention Head Masking
+[ICML 2025] Codes for the paper.
 
-We provide our rough project files here. When the paper becomes public, we will tidy up the files!
-
-**For reviewers:** Please refer to [rebuttal.pdf](rebuttal.pdf).
+We are on our way to clearing and organizing the files. Hold on for a while :)
