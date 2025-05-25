@@ -1,14 +1,13 @@
 #!/bin/bash
 
 LM_MODEL_PATH="~/PretrainedModels/gemma-2-2b-it"
-TRAIN_DATA_PATH="../dataset/XNLI-15way/xnli.15way.orig.tsv"
-DEV_DATA_PATH="../dataset/XNLI-15way/xnli.15way.orig.tsv"
+TRAIN_DATA_PATH="dataset/XNLI-15way/xnli.15way.orig.tsv"
+DEV_DATA_PATH="dataset/XNLI-15way/xnli.15way.orig.tsv"
 NUM_GPUS=1
 
-source activate modularity
-cd ../
+source activate headsup
 
-WANDB_MODE=offline python train_mask.py \
+python train_mask.py \
     --lm_model_path $LM_MODEL_PATH \
     --train_data_path $TRAIN_DATA_PATH \
     --dev_data_path $DEV_DATA_PATH \

@@ -1,18 +1,23 @@
 #!/bin/bash
 
-LM_MODEL_PATH="~/PretrainedModels/qwen2.5-7b-instruct"
-TRAIN_DATA_PATH="../dataset/function_vectors/abstractive"
-DEV_DATA_PATH="../dataset/function_vectors/abstractive"
+LM_MODEL_PATH="/public/share/model/Qwen2.5-7B-Instruct"     # Your model path
+TRAIN_DATA_PATH="dataset/function_vectors/abstractive"
+DEV_DATA_PATH="dataset/function_vectors/abstractive"
 NUM_GPUS=1
 
-source activate modularity
-cd ../
+if [[ "${LM_MODEL_PATH,,}" == *instruct* ]]; then
+    MODEL_TYPE="qwen2"
+else
+    MODEL_TYPE="qwen2-plm"
+fi
 
-WANDB_MODE=offline python train_mask.py \
+source activate headsup
+
+python train_mask.py \
     --lm_model_path $LM_MODEL_PATH \
     --train_data_path $TRAIN_DATA_PATH \
     --dev_data_path $DEV_DATA_PATH \
-    --model_type qwen2 \
+    --model_type $MODEL_TYPE \
     --seed 42 \
     --dataset_use_cache false \
     --output_dir ./output/qwen2/fv \

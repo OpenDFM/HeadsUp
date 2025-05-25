@@ -8,7 +8,6 @@ import safetensors
 import torch
 from torch import nn
 import itertools
-import wandb
 import datasets
 from datasets import Dataset, concatenate_datasets
 from models.modeling_llama import LlamaForCausalLM
@@ -29,10 +28,10 @@ QWEN2_TEMPLATE = "<|im_start|>user\n{src}<|im_end|>\n<|im_start|>assistant\n"
 QWEN2_PLM_TEMPLATE = "{src}\n\n"
 GEMMA2_TEMPLATE = "<bos><start_of_turn>user\n{src}<end_of_turn>\n<start_of_turn>model\n"
 
-def preprocess_batch(samples, lm_tokenizer, model_type):
-    assert model_type in ["llama-inst", "llama-plm", "phi3", "mistral", "qwen2", "qwen2-plm", "gemma2"]
+def preprocess_batch(samples, lm_tokenizer, model_type, fewshot_dataset=None):
+    assert model_type in ["llama", "llama-plm", "phi3", "mistral", "qwen2", "qwen2-plm", "gemma2"]
     template = ""
-    if model_type == "llama-inst":
+    if model_type == "llama":
         template = LLAMA_TEMPLATE
         combined_strs = [LLAMA_TEMPLATE.format(src=input_str.strip()) + f"{target_str.strip()}<|eot_id|>" for input_str, target_str in zip(samples["input_str"], samples["target_str"])]
     elif model_type == "llama-plm":
@@ -55,7 +54,7 @@ def preprocess_batch(samples, lm_tokenizer, model_type):
         combined_strs = [GEMMA2_TEMPLATE.format(src=input_str.strip()) + f"{target_str.strip()}<end_of_turn>" for input_str, target_str in zip(samples["input_str"], samples["target_str"])]
     lm_inputs = lm_tokenizer(
         combined_strs, 
-        max_length=2048, 
+        max_length=32768, 
         truncation=True, 
         padding=False, 
         add_special_tokens=False,
@@ -65,8 +64,37 @@ def preprocess_batch(samples, lm_tokenizer, model_type):
     labels = copy.deepcopy(lm_inputs["input_ids"])
     for i, input_str_len in enumerate(input_str_lens):
         labels[i][:input_str_len] = -100
-        # lm_inputs["input_ids"][i] = lm_inputs["input_ids"][i][:input_str_len + 5]
-        # labels[i] = labels[i][:input_str_len + 5]
+
+    return {
+        "lm_input_ids": lm_inputs["input_ids"],
+        "lm_labels": labels,
+    }
+
+def preprocess_fewshot_batch(samples, lm_tokenizer, model_type, fewshot_dataset):
+    assert model_type in [
+        "llama"
+    ]
+    fewshot_input_str = "<|begin_of_text|>"
+    for sample in fewshot_dataset:
+        input_str, target_str = sample["input_str"], sample["target_str"]
+        fewshot_input_str += f"<|start_header_id|>user<|end_header_id|>\n\n{input_str.strip()}<|eot_id|>"
+        fewshot_input_str += f"<|start_header_id|>assistant<|end_header_id|>\n\n{target_str.strip()}<|eot_id|>"
+    fewshot_input_str += "<|start_header_id|>user<|end_header_id|>\n\n{src}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+
+    template = fewshot_input_str
+    combined_strs = [template.format(src=input_str.strip()) + f"{target_str.strip()}<|eot_id|>" for input_str, target_str in zip(samples["input_str"], samples["target_str"])]
+    lm_inputs = lm_tokenizer(
+        combined_strs, 
+        max_length=32768, 
+        truncation=True, 
+        padding=False, 
+        add_special_tokens=False,
+        return_tensors="np"
+    )
+    input_str_lens = [len(lm_tokenizer(template.format(src=input_str.strip()), add_special_tokens=False)["input_ids"]) for input_str in samples["input_str"]]
+    labels = copy.deepcopy(lm_inputs["input_ids"])
+    for i, input_str_len in enumerate(input_str_lens):
+        labels[i][:input_str_len] = -100
 
     return {
         "lm_input_ids": lm_inputs["input_ids"],
@@ -82,38 +110,6 @@ class SimpleTensorModel(nn.Module):
 
     def forward(self, x=None):
         return self.tensor
-
-class PPLMetric:
-    def __init__(self):
-        self.total_loss = 0
-        self.total_tokens = 0
-
-    def compute_metrics(self, eval_preds, compute_result: bool):
-        preds, labels = eval_preds.predictions, eval_preds.label_ids
-        
-        # Shift logits and labels for PPL calculation
-        shifted_preds = preds[:, :-1, :].contiguous().view(-1, preds.size(-1))
-        shifted_labels = labels[:, 1:].contiguous().view(-1)
-        shifted_labels = shifted_labels.to(shifted_preds.device)
-        # Filter out labels that are -100 (which are padding tokens that should be ignored)
-        mask = (shifted_labels != -100).to(shifted_preds.device)
-        filtered_preds = shifted_preds[mask]
-        filtered_labels = shifted_labels[mask]
-
-        loss_fct = torch.nn.CrossEntropyLoss()
-        loss = loss_fct(filtered_preds, filtered_labels)
-        self.total_loss += loss.item()
-        self.total_tokens += len(filtered_labels)
-
-        if compute_result:
-            perplexity = torch.exp(torch.tensor(self.total_loss / self.total_tokens))
-            self.total_loss = 0
-            self.total_tokens = 0
-            return {
-                "perplexity": perplexity.item(),
-            }
-        else:
-            return {}
 
 class CustomDataCollator(DataCollatorForLanguageModeling):
     def __init__(self, lm_tokenizer, padding=True):
@@ -137,22 +133,6 @@ class CustomDataCollator(DataCollatorForLanguageModeling):
             "lm_labels": lm_labels,
         }
 
-class FreezePartGradientsCallback(TrainerCallback):
-    def __init__(self, model, freeze_mask):
-        super().__init__()
-        self.model = model
-        self.freeze_mask = freeze_mask  # 定义冻结掩码
-        self.flatten_mask = (freeze_mask.sigmoid() >= 0.5).float().flatten()
-
-    def on_pre_optimizer_step(self, args, state, control, **kwargs):
-        # 清零冻结位置的梯度
-        grad_rank = self.model.tensor.grad.argsort().flip(0).argsort().to("cpu")
-        rank_stat = [
-            self.flatten_mask[grad_rank[:int(pp * len(grad_rank))]].sum()/self.flatten_mask.sum()
-        for pp in [0.05, 0.1, 0.3, 0.5]]
-        # self.model.tensor.grad[self.freeze_mask == 1] = 0
-        pass
-
 # Custom loss function by overriding Trainer's compute_loss
 class CustomTrainer(Trainer):
     def __init__(self, *args, lm_model, lm_tokenizer, **kwargs):
@@ -160,7 +140,7 @@ class CustomTrainer(Trainer):
         self.lm_model = lm_model
         self.lm_tokenizer = lm_tokenizer
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         lm_input_ids = inputs["lm_input_ids"].to(self.args.device)
         lm_attention_mask = inputs["lm_attention_mask"].to(self.args.device)
         lm_labels = inputs["lm_labels"].to(self.args.device)
@@ -190,7 +170,6 @@ class CustomTrainer(Trainer):
 
         norm_lambda = self.args.norm_lambda
         normalizer = torch.sum(weights_tensor, dim=1).mean()
-        # use_mlp_num = torch.sum(weights_tensor[:, 32::33], dim=1).mean()
         loss = pred_output_loss + norm_lambda * normalizer
         self.log({
             "pred_output_loss": pred_output_loss.item(),
@@ -208,12 +187,11 @@ class CustomTrainer(Trainer):
         bsz = lm_input_ids.size(0)
 
         with torch.no_grad():
-            # 1. Forward pass through embed model to get weight tensor
             weights_logit: torch.Tensor = model(None).unsqueeze(0).repeat(bsz, 1)
             weights_tensor = (weights_logit.sigmoid() >= 0.5).to(weights_logit.dtype)
             weights_tensor = weights_tensor.to(self.lm_model.device)
             pred_output_loss = None
-            # 3. Also generate
+            # Also generate
             for one_lm_input_ids, one_lm_labels, one_weights_tensor in zip(lm_input_ids, lm_labels, weights_tensor):
                 one_lm_scr_input_ids = one_lm_input_ids[one_lm_labels == -100].unsqueeze(0)
                 one_lm_attention_mask = torch.ones_like(one_lm_scr_input_ids)
@@ -232,13 +210,14 @@ class CustomTrainer(Trainer):
 class ModelArguments:
     embed_model_path: str = field(default="~/PretrainedModels/bge-m3", metadata={"help": "Path to the embedding model (to be trained)"})
     lm_model_path: str = field(default="~/PretrainedModels/llama-3.1-8b-instruct-hf", metadata={"help": "Path to the language model"})
-    model_type: str = field(default="llama-inst", metadata={"help": "Model type (llama-inst, llama-plm, phi3)"})
+    model_type: str = field(default="llama", metadata={"help": "Model type (llama, llama-plm, phi3)"})
 
 @dataclass
 class DataArguments:
     train_data_path: str = field(default="./dataset/XNLI-15way/xnli.15way.orig.tsv", metadata={"help": "Path to the training data"})
     dev_data_path: str = field(default="./dataset/XNLI-15way/xnli.15way.orig.tsv", metadata={"help": "Path to the development data"})
     dataset_use_cache: bool = field(default=True, metadata={"help": "Whether to use cache for dataset"})
+    max_seq_length: int = field(default=32768, metadata={"help": "Maximum sequence length for input"})
 
 @dataclass
 class CustomTrainingArguments(TrainingArguments):
@@ -266,20 +245,15 @@ def search_weight_embed(lm_model, task: str, args, training_args):
     n_layers = lm_model.config.num_hidden_layers
     n_heads = lm_model.config.num_attention_heads
 
-    embed_model = SimpleTensorModel(tensor_length=n_layers * n_heads + n_layers).to(torch.device("cuda"))
+    head_mask_model = SimpleTensorModel(tensor_length=n_layers * n_heads + n_layers).to(torch.device("cuda"))
 
     # Datasets. Only remain "input_str", "target_str", (optional) "input_ids"
     if not args.dataset_use_cache:
         datasets.disable_caching()
     train_dataset, dev_dataset = None, None
+    fewshot_dataset = None
     if "XNLI" in args.train_data_path:
-        lang_weight_dict = {}
-        for root, dir, files in os.walk("./llama-hf/output/xnli"):
-            for file in files:
-                if file.endswith(".safetensors"):
-                    langs = os.path.basename(os.path.dirname(root))
-                    path = os.path.join(root, file)
-                    lang_weight_dict[langs] = safetensors.torch.load_file(path)["tensor"]
+        map_func = preprocess_batch
 
         LANG_LIST = task.split("_")
         LANG_DICT = {"ar": "Arabic", "fr": "French", "es": "Spanish", "de": "German", "en": "English", "ru": "Russian", "zh": "Chinese"}
@@ -302,13 +276,26 @@ def search_weight_embed(lm_model, task: str, args, training_args):
         train_dataset = train_dataset.shuffle(seed=args.seed)
     elif "function_vectors" in args.train_data_path:
         dataset = Dataset.from_json(args.train_data_path)
-        dataset = dataset.map(
-            lambda sample: {
-                "input_str": sample["input"],
-                "target_str": sample["output"],
-            }
-        )
-        dataset = dataset.remove_columns(["input", "output"])
+        if "fewshot" in args.train_data_path:
+            map_func = preprocess_fewshot_batch
+            dataset = dataset.map(
+                lambda sample: {
+                    "input_str": sample["input"],
+                    "target_str": sample["output"],
+                }
+            )
+            dataset = dataset.remove_columns(["input", "output"])
+            dataset = dataset.select(range(min(len(dataset) - 100, 10000))).shuffle(seed=args.seed)
+            fewshot_dataset, dataset = dataset.select(range(5)), dataset.select(range(5, len(dataset)))
+        else:
+            map_func = preprocess_batch
+            dataset = dataset.map(
+                lambda sample: {
+                    "input_str": str(sample["input"]),
+                    "target_str": str(sample["output"]),
+                }
+            )
+            dataset = dataset.remove_columns(["input", "output"])
         train_dataset = dataset.select(range(min(len(dataset) - 100, 10000)))
         dev_dataset = dataset.select(range(len(dataset) - 100, len(dataset)))
     else:
@@ -317,18 +304,24 @@ def search_weight_embed(lm_model, task: str, args, training_args):
     # Tokenize datasets
     train_dataset_dir, dev_dataset_dir = os.path.dirname(args.train_data_path), os.path.dirname(args.dev_data_path)
     train_dataset = train_dataset.map(
-        lambda sample: preprocess_batch(sample, lm_tokenizer, model_type=args.model_type),
+        lambda sample: map_func(sample, lm_tokenizer, model_type=args.model_type, fewshot_dataset=fewshot_dataset),
         batched=True,
         batch_size=128,
-        num_proc=4,
+        num_proc=1,
         cache_file_name=os.path.join(train_dataset_dir, ".cache/train_dataset_cache.arrow") if args.dataset_use_cache else None
+    ).filter(
+        lambda sample: len(sample["lm_input_ids"]) <= args.max_seq_length,
+        batched=False
     ).shuffle(seed=args.seed)
     dev_dataset = dev_dataset.map(
-        lambda sample: preprocess_batch(sample, lm_tokenizer, model_type=args.model_type),
+        lambda sample: map_func(sample, lm_tokenizer, model_type=args.model_type, fewshot_dataset=fewshot_dataset),
         batched=True,
         batch_size=128,
-        num_proc=4,
+        num_proc=1,
         cache_file_name=os.path.join(dev_dataset_dir, ".cache/dev_dataset_cache.arrow") if args.dataset_use_cache else None
+    ).filter(
+        lambda sample: len(sample["lm_input_ids"]) <= args.max_seq_length,
+        batched=False
     )
 
     # Data Collator
@@ -339,20 +332,18 @@ def search_weight_embed(lm_model, task: str, args, training_args):
 
     # Trainer
     trainer = CustomTrainer(
-        model=embed_model,
+        model=head_mask_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=dev_dataset,
         data_collator=data_collator,
         compute_metrics=None,
-        # callbacks=[FreezePartGradientsCallback(embed_model, lang_weight_dict[task])],
         lm_model=lm_model,
         lm_tokenizer=lm_tokenizer,
     )
 
     # Train
     trainer.train(resume_from_checkpoint=False)
-    # trainer.evaluate()
 
 
 if __name__ == "__main__":
@@ -381,29 +372,22 @@ if __name__ == "__main__":
         device_map=torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}") if args.distributed_state.use_distributed else "auto", 
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
-        max_position_embeddings=2048
+        max_position_embeddings=32768
     )
 
     train_data_dir = args.train_data_path
-    ALL_LANGS = ["en", "zh", "fr", "de", "es", "ru", "ar"]
-    for i, (src_lang, tgt_lang) in enumerate(itertools.permutations(ALL_LANGS, 2)):
-        print(f"\n********** [{i+1}/{len(ALL_LANGS) * (len(ALL_LANGS) - 1)}] Training {src_lang} -> {tgt_lang} **********\n")
-        # if (src_lang, tgt_lang) in [
-        #     ("en", "ar"), ("en", "de"), ("en", "es"), ("en", "fr"), ("en", "ru"), ("en", "zh"), 
-        #     ("fr", "de"), ("fr", "en"), ("fr", "zh"), ("fr", "es"), ("fr", "ru"), ("fr", "ar"),
-        #     ("zh", "en"), ("zh", "fr"), ("zh", "de"), ("zh", "es"), ("zh", "ru"), ("zh", "ar"),
-        #     ("de", "en"), ("de", "fr"), ("de", "zh"), ("de", "es"), ("de", "ru"), ("de", "ar"),
-        #     ("es", "en"), ("es", "fr"), ("es", "de"), ("es", "zh"), ("es", "ru"), ("es", "ar"),
-        #     ("ru", "en"), ("ru", "fr"), ("ru", "de"), ("ru", "zh"), ("ru", "es"), 
-        # ]:
-        #     continue
-        search_weight_embed(lm_model, f"{src_lang}_{tgt_lang}", args, training_args)
-        # if i == 0: break
-    # for root, dirs, files in os.walk(train_data_dir):
-    #     for file in files:
-    #         if file.endswith(".json"):
-    #             task = os.path.basename(file).split(".")[0]
-    #             if "3" not in task: continue
-    #             print(f"\n********** Training {task} **********\n")
-    #             args.train_data_path = os.path.join(root, file)
-    #             search_weight_embed(lm_model, task, args, training_args)
+    if "XNLI" in train_data_dir:
+        ALL_LANGS = ["en", "zh", "fr", "de", "es", "ru", "ar"]
+        for i, (src_lang, tgt_lang) in enumerate(itertools.permutations(ALL_LANGS, 2)):
+            print(f"\n********** [{i+1}/{len(ALL_LANGS) * (len(ALL_LANGS) - 1)}] Training {src_lang} -> {tgt_lang} **********\n")
+            search_weight_embed(lm_model, f"{src_lang}_{tgt_lang}", args, training_args)
+    elif "function_vectors" in train_data_dir:
+        for root, dirs, files in os.walk(train_data_dir):
+            for file in files:
+                if file.endswith(".json"):
+                    task = os.path.basename(file).split(".")[0]
+                    print(f"\n********** Training {task} **********\n")
+                    args.train_data_path = os.path.join(root, file)
+                    search_weight_embed(lm_model, task, args, training_args)
+    else:
+        assert False, "Unsupported dataset"

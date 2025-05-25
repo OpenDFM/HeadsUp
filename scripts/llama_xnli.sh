@@ -1,21 +1,26 @@
 #!/bin/bash
 
-LM_MODEL_PATH="~/PretrainedModels/llama-3.1-8b-hf"
-TRAIN_DATA_PATH="../dataset/XNLI-15way/xnli.15way.orig.tsv"
-DEV_DATA_PATH="../dataset/XNLI-15way/xnli.15way.orig.tsv"
+LM_MODEL_PATH="/public/share/model/Meta-Llama-3.1-8B-Instruct"    # Your model path
+TRAIN_DATA_PATH="dataset/XNLI-15way/xnli.15way.orig.tsv"
+DEV_DATA_PATH="dataset/XNLI-15way/xnli.15way.orig.tsv"
 NUM_GPUS=1
 
-source activate modularity
-cd ../
+if [[ "${LM_MODEL_PATH,,}" == *instruct* ]]; then
+    MODEL_TYPE="llama"
+else
+    MODEL_TYPE="llama-plm"
+fi
 
-WANDB_MODE=offline python train_mask.py \
+source activate headsup
+
+python train_mask.py \
     --lm_model_path $LM_MODEL_PATH \
     --train_data_path $TRAIN_DATA_PATH \
     --dev_data_path $DEV_DATA_PATH \
-    --model_type llama-plm \
+    --model_type $MODEL_TYPE \
     --seed 42 \
     --dataset_use_cache false \
-    --output_dir ./output/xnli \
+    --output_dir ./output/llama/xnli \
     --overwrite_output_dir \
     --num_train_epochs 10 \
     --per_device_train_batch_size 16 \

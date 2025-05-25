@@ -1,0 +1,13 @@
+torch
+transformers==4.51.3
+safetensors
+datasets==3.0.1
+pandas
+numpy
+tqdm
+ipython
+matplotlib
+seaborn
+rouge_score
+nltk
+jieba
