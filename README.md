@@ -1,6 +1,6 @@
 # Heads up! Large Language Models Can Perform Tasks Without Your Instruction via Selective Attention Head Masking
 
-![](https://i.imgur.com/8E0ZiSb.png)
+![](https://icml.cc/media/PosterPDFs/ICML%202025/43598.png)
 
 This repository provides code for training attention head masks and for plotting some of the figures presented in our paper ***Heads up! Large Language Models Can Perform Tasks Without Your Instruction via Selective Attention Head Masking*** (ICML'25).
 
