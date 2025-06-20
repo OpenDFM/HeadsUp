@@ -2,7 +2,7 @@
 
 ![](https://icml.cc/media/PosterPDFs/ICML%202025/43598.png)
 
-This repository provides code for training attention head masks and for plotting some of the figures presented in our paper ***Heads up! Large Language Models Can Perform Tasks Without Your Instruction via Selective Attention Head Masking*** (ICML'25).
+This repository provides code for training attention head masks and for plotting some of the figures presented in our paper [***Heads up! Large Language Models Can Perform Tasks Without Your Instruction via Selective Attention Head Masking***](https://openreview.net/forum?id=x2Dw9aNbvw) (ICML'25).
 
 ## Environment
 ```bash
@@ -24,5 +24,11 @@ bash scripts/llama_xnli.sh      # Train llama-3.1 on XNLI dataset
 
 ## Citation
 ```bibtex
-coming soon
+@inproceedings{han2025heads,
+    title={Heads up! Large Language Models Can Perform Tasks Without Your Instruction via Selective Attention Head Masking},
+    author={Senyu Han and Hongchuan Zeng and Kai Yu and Lu Chen},
+    booktitle={Forty-second International Conference on Machine Learning},
+    year={2025},
+    url={https://openreview.net/forum?id=x2Dw9aNbvw}
+}
 ```
